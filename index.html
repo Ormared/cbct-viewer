@@ -54,7 +54,24 @@
 
   <label><input type="checkbox" id="cross" checked style="width:auto"> crosshair (2D)</label>
   <label><input type="checkbox" id="cbar" style="width:auto"> colorbar</label>
-  <p style="color:#666;line-height:1.5">drag = window/level · right-drag = zoom · in 3D: drag rotates. Values are raw CBCT densities (intercept-corrected), not true HU.</p>
+  <label>Right-drag</label>
+  <select id="drag">
+    <option value="9">contrast (drag)</option>
+    <option value="1">contrast (box)</option>
+    <option value="2">measure distance</option>
+    <option value="7">measure angle</option>
+    <option value="3">pan</option>
+    <option value="0">off</option>
+  </select>
+  <button type="button" id="clearm" style="margin-top:6px">clear measurements</button>
+  <p style="color:#666;line-height:1.5">
+    left-click = move crosshair · scroll = next slice · middle- or shift-drag = pan · double-click = reset contrast<br>
+    contrast (drag): up/down = darker/brighter, right/left = softer/sharper; works in 3D too<br>
+    contrast (box): fits the window to the values inside the box<br>
+    measure angle: right-drag one arm, then right-click to place the other<br>
+    3D: drag rotates · scroll zooms, or moves the cut while clipping · double-click jumps the crosshair there<br>
+    keys (click the image first): V layout · C clip presets<br>
+    Values are raw CBCT densities (intercept-corrected), not true HU.</p>
 </form>
 <div id="view"><canvas id="gl"></canvas><div id="status">loading 27 MB…</div></div>
 
@@ -81,25 +98,47 @@ nv.setSliceType(SLICE_TYPE.MULTIPLANAR)
 $("status").textContent = ""
 
 const vol = () => nv.volumes[0]
+// NiiVue also changes state itself (right-drag, double-click, 3D scroll, V/C/M keys) and windowing fires
+// no callback, so read it all back after every canvas event. NiiVue registered its listeners in
+// attachToCanvas, so they run first and this sees the updated values.
+function sync() {
+  const v = vol(), [d, a, e] = nv.scene.clipPlaneDepthAziElevs[0]
+  $("cmin").value = $("lmin").textContent = Math.round(v.cal_min)
+  $("cmax").value = $("lmax").textContent = Math.round(v.cal_max)
+  $("clip").value = $("lclip").textContent = +Math.max(-0.1, Math.min(1, d)).toFixed(2)
+  $("azi").value = a; $("ele").value = e
+  $("layout").value = nv.opts.sliceType
+  $("drag").value = nv.opts.dragMode
+}
+for (const ev of ["mousemove", "mouseup", "touchend", "wheel", "dblclick", "keyup"]) $("gl").addEventListener(ev, sync)
+
 function applyWindow(lo, hi) {
-  $("cmin").value = lo; $("cmax").value = hi
-  $("lmin").textContent = lo; $("lmax").textContent = hi
   vol().cal_min = +lo; vol().cal_max = +hi
   nv.updateGLVolume()
+  sync()
 }
+const clip = () => {
+  $("lclip").textContent = $("clip").value
+  // depth 2 = no cut; pass the angles anyway so sync() doesn't reset their sliders to 0
+  nv.setClipPlane([+$("clip").value > 0.99 ? 2 : +$("clip").value, +$("azi").value, +$("ele").value])
+}
+$("clip").oninput = $("azi").oninput = $("ele").oninput = clip
+clip()
+nv.setDragMode(+$("drag").value)
 const [p0, p1] = $("preset").value.split(",")
 applyWindow(p0, p1)
 
 $("preset").onchange = e => applyWindow(...e.target.value.split(","))
 $("cmin").oninput = $("cmax").oninput = () => applyWindow($("cmin").value, $("cmax").value)
 $("layout").onchange = e => nv.setSliceType(+e.target.value)
-$("cmap").onchange = e => { vol().colormap = e.target.value; nv.updateGLVolume() }
-const clip = () => {
-  $("lclip").textContent = $("clip").value
-  nv.setClipPlane(+$("clip").value > 0.99 ? [2, 0, 0] : [+$("clip").value, +$("azi").value, +$("ele").value])
+$("drag").onchange = e => nv.setDragMode(+e.target.value)
+$("clearm").onclick = () => nv.clearAllMeasurements()
+$("cmap").onchange = e => {
+  const { cal_min, cal_max, robust_min, robust_max } = vol()
+  vol().colormap = e.target.value                  // NiiVue resets the window to the colormap's own range here
+  Object.assign(vol(), { robust_min, robust_max })  // keep double-click resetting to the full range
+  applyWindow(cal_min, cal_max)
 }
-$("clip").oninput = $("azi").oninput = $("ele").oninput = clip
-clip()
 $("cross").onchange = e => { nv.setCrosshairWidth(e.target.checked ? 1 : 0) }
 $("cbar").onchange = e => { nv.opts.isColorbar = e.target.checked; nv.drawScene() }
 </script>
