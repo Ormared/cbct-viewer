@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CBCT viewer</title>
+<style>
+  html,body{margin:0;height:100%;background:#111;color:#ddd;font:13px system-ui,sans-serif}
+  body{display:flex}
+  #panel{width:230px;padding:12px;overflow:auto;flex:none;background:#191919}
+  #panel label{display:block;margin:10px 0 2px;color:#9aa}
+  select,input[type=range],button{width:100%}
+  #view{flex:1;position:relative}
+  canvas{width:100%;height:100%;display:block}
+  #status{position:absolute;left:8px;bottom:6px;color:#7f8;font-family:monospace}
+</style>
+<form id="panel" autocomplete="off">
+  <label>Resolution</label>
+  <select id="res">
+    <option value="">0.4 mm (27 MB)</option>
+    <option value="?lo">0.6 mm (9 MB, faster)</option>
+  </select>
+
+  <label>Layout</label>
+  <select id="layout">
+    <option value="4">3D render</option>
+    <option value="3" selected>Multiplanar + 3D</option>
+    <option value="0">Axial</option><option value="1">Coronal</option><option value="2">Sagittal</option>
+  </select>
+
+  <label>Preset</label>
+  <select id="preset">
+    <option value="200,1130">Bone / teeth</option>
+    <option value="600,1130">Enamel / metal only</option>
+    <option value="-370,958" selected>Romexis default</option>
+    <option value="-200,400">Soft tissue</option>
+    <option value="-600,1130">Everything</option>
+  </select>
+
+  <label>Threshold (min) <span id="lmin"></span></label>
+  <input type="range" id="cmin" min="-650" max="1130" step="10">
+  <label>Ceiling (max) <span id="lmax"></span></label>
+  <input type="range" id="cmax" min="-650" max="1130" step="10">
+
+  <label>Colormap</label>
+  <select id="cmap">
+    <option>gray</option><option>ct_bones</option><option>bone</option>
+    <option>ct_soft</option><option>ct_surface</option><option>hot</option><option>plasma</option>
+  </select>
+
+  <label>Clip plane depth <span id="lclip"></span></label>
+  <input type="range" id="clip" min="-0.1" max="1" step="0.02" value="1">
+  <label>Clip azimuth</label>
+  <input type="range" id="azi" min="0" max="360" step="5" value="180">
+  <label>Clip elevation</label>
+  <input type="range" id="ele" min="-90" max="90" step="5" value="20">
+
+  <label><input type="checkbox" id="cross" checked style="width:auto"> crosshair (2D)</label>
+  <label><input type="checkbox" id="cbar" style="width:auto"> colorbar</label>
+  <p style="color:#666;line-height:1.5">drag = window/level · right-drag = zoom · in 3D: drag rotates. Values are raw CBCT densities (intercept-corrected), not true HU.</p>
+</form>
+<div id="view"><canvas id="gl"></canvas><div id="status">loading 27 MB…</div></div>
+
+<script type="module">
+import { Niivue, SLICE_TYPE, SHOW_RENDER } from "https://cdn.jsdelivr.net/npm/@niivue/niivue@0.69.0/+esm"
+
+const $ = id => document.getElementById(id)
+const nv = new Niivue({
+  backColor: [0.07, 0.07, 0.07, 1],
+  show3Dcrosshair: false,
+  onLocationChange: d => $("status").innerHTML = d.string,
+})
+await nv.attachToCanvas($("gl"))
+nv.opts.multiplanarShowRender = SHOW_RENDER.ALWAYS
+nv.setClipPlaneColor([0.7, 0, 0.7, 0])   // hide the clip-plane slab overlay
+// ponytail: no 3D shading control — NiiVue's gradient blur/sobel FBO loses the WebGL
+// context on this ANGLE/NVIDIA stack at any volume size; retry setVolumeRenderIllumination on another GPU.
+const lo = location.search.includes("lo")
+$("res").value = lo ? "?lo" : ""
+$("res").onchange = e => location.search = e.target.value
+await nv.loadVolumes([{ url: lo ? "scan_lo.nii.gz" : "scan.nii.gz", colormap: "gray" }])
+window.nv = nv
+nv.setSliceType(SLICE_TYPE.MULTIPLANAR)
+$("status").textContent = ""
+
+const vol = () => nv.volumes[0]
+function applyWindow(lo, hi) {
+  $("cmin").value = lo; $("cmax").value = hi
+  $("lmin").textContent = lo; $("lmax").textContent = hi
+  vol().cal_min = +lo; vol().cal_max = +hi
+  nv.updateGLVolume()
+}
+const [p0, p1] = $("preset").value.split(",")
+applyWindow(p0, p1)
+
+$("preset").onchange = e => applyWindow(...e.target.value.split(","))
+$("cmin").oninput = $("cmax").oninput = () => applyWindow($("cmin").value, $("cmax").value)
+$("layout").onchange = e => nv.setSliceType(+e.target.value)
+$("cmap").onchange = e => { vol().colormap = e.target.value; nv.updateGLVolume() }
+const clip = () => {
+  $("lclip").textContent = $("clip").value
+  nv.setClipPlane(+$("clip").value > 0.99 ? [2, 0, 0] : [+$("clip").value, +$("azi").value, +$("ele").value])
+}
+$("clip").oninput = $("azi").oninput = $("ele").oninput = clip
+clip()
+$("cross").onchange = e => { nv.setCrosshairWidth(e.target.checked ? 1 : 0) }
+$("cbar").onchange = e => { nv.opts.isColorbar = e.target.checked; nv.drawScene() }
+</script>
