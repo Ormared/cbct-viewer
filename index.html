@@ -14,6 +14,7 @@
 <form id="panel" autocomplete="off">
   <label>Resolution</label>
   <select id="res">
+    <option value="?teeth">0.2 mm, teeth &amp; jaws only (45 MB)</option>
     <option value="">0.4 mm (27 MB)</option>
     <option value="?lo">0.6 mm (9 MB, faster)</option>
   </select>
@@ -74,12 +75,17 @@
     keys (click the image first): V layout · C clip presets<br>
     Values are raw CBCT densities (intercept-corrected), not true HU.</p>
 </form>
-<div id="view"><canvas id="gl"></canvas><div id="status">loading 27 MB…</div></div>
+<div id="view"><canvas id="gl"></canvas><div id="status">loading…</div></div>
 
 <script type="module">
 import { Niivue, SLICE_TYPE, SHOW_RENDER } from "https://cdn.jsdelivr.net/npm/@niivue/niivue@0.69.0/+esm"
 
 const $ = id => document.getElementById(id)
+// without these a failure (no WebGL2, download error, GPU out of memory) leaves "loading…" up forever
+const fail = msg => $("status").textContent = `failed: ${msg}` + (/webgl/i.test(msg) ? " (turn on hardware acceleration in the browser settings)" : "")
+addEventListener("error", e => fail(e.message))
+addEventListener("unhandledrejection", e => fail(e.reason?.message ?? e.reason))
+$("gl").addEventListener("webglcontextlost", () => fail("the GPU ran out of memory, pick a lower resolution"))
 const nv = new Niivue({
   backColor: [0.07, 0.07, 0.07, 1],
   show3Dcrosshair: false,
@@ -90,10 +96,13 @@ nv.opts.multiplanarShowRender = SHOW_RENDER.ALWAYS
 nv.setClipPlaneColor([0.7, 0, 0.7, 0])   // hide the clip-plane slab overlay
 // ponytail: no 3D shading control — NiiVue's gradient blur/sobel FBO loses the WebGL
 // context on this ANGLE/NVIDIA stack at any volume size; retry setVolumeRenderIllumination on another GPU.
-const lo = location.search.includes("lo")
-$("res").value = lo ? "?lo" : ""
+const q = ["?lo", "?teeth"].includes(location.search) ? location.search : ""
+$("res").value = q
 $("res").onchange = e => location.search = e.target.value
-await nv.loadVolumes([{ url: lo ? "scan_lo.nii.gz" : "scan.nii.gz", colormap: "gray" }])
+$("status").textContent = `loading ${$("res").selectedOptions[0].text}…`
+// 0.2 mm ships cropped: uncropped, NiiVue's RGBA8 copy (1.5 GiB) exceeds Chrome's 1.25 GiB 3D-texture cap and renders black
+const file = { "": "scan", "?lo": "scan_lo", "?teeth": "scan_teeth" }[q] + ".nii.gz"
+await nv.loadVolumes([{ url: file, colormap: "gray" }])
 window.nv = nv
 nv.setSliceType(SLICE_TYPE.MULTIPLANAR)
 $("status").textContent = ""
